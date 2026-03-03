@@ -1,0 +1,75 @@
+name: Export Course Summaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      course_id:
+        description: "Course ID to export (e.g. 30004)"
+        required: true
+        type: string
+      export_pdf:
+        description: "Export as PDF attachment (uncheck to send as HTML email)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install markdown pillow requests
+
+      - name: Install PDF dependencies
+        if: inputs.export_pdf == true
+        run: |
+          sudo apt-get install -y fonts-noto-cjk libpango1.0-0 libcairo2
+          pip install weasyprint
+
+      - name: Fetch database from data branch
+        run: |
+          mkdir -p data
+          curl -fL -o data/icourse.db.enc.tmp \
+            "https://raw.githubusercontent.com/${{ github.repository }}/data/data/icourse.db.enc" \
+            || echo "Fetch from data branch failed."
+          if [ -f data/icourse.db.enc.tmp ]; then
+            mv data/icourse.db.enc.tmp data/icourse.db.enc
+            echo "Database loaded from data branch."
+          else
+            echo "::error::No database found on data branch."
+            exit 1
+          fi
+
+      - name: Decrypt database
+        env:
+          DB_KEY: ${{ secrets.STUID }}${{ secrets.UISPSW }}${{ secrets.DASHSCOPE_API_KEY }}${{ secrets.SMTP_PASSWORD }}
+        run: |
+          openssl enc -aes-256-cbc -d -pbkdf2 \
+            -in data/icourse.db.enc -out data/icourse.db \
+            -pass env:DB_KEY
+          echo "Database decrypted."
+
+      - name: Export course summaries
+        env:
+          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+          EXPORT_COURSE_ID: ${{ inputs.course_id }}
+        run: |
+          if [ "${{ inputs.export_pdf }}" = "true" ]; then
+            python scripts/export_course.py --course-id "$EXPORT_COURSE_ID" --pdf
+          else
+            python scripts/export_course.py --course-id "$EXPORT_COURSE_ID"
+          fi
