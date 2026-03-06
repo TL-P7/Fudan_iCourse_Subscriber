@@ -140,7 +140,7 @@ def main():
         """SELECT sub_id, sub_title, date, summary
            FROM lectures
            WHERE course_id = ? AND summary IS NOT NULL
-           ORDER BY date ASC, sub_id ASC""",
+           ORDER BY date ASC, CAST(sub_id AS INTEGER) ASC""",
         (args.course_id,),
     ).fetchall()
     lectures = [dict(row) for row in rows]
