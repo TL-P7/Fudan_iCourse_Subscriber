@@ -2,8 +2,8 @@ name: iCourse Check
 
 on:
   schedule:
-    # Every day at 22:00 BTC (UTC + 8)
-    - cron: "0 14 * * *"
+    # Every day at 21:00 BTC (UTC + 8)
+    - cron: "0 13 * * *"
   workflow_dispatch:
 
 permissions:
