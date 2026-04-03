@@ -31,4 +31,4 @@ bugs.md
 db-viewer/
 
 .claude/
-.github/
+# .github/
