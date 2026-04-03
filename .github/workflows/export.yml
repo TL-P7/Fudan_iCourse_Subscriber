@@ -47,12 +47,14 @@ jobs:
       - name: Fetch database from data branch
         run: |
           mkdir -p data
-          curl -fL -o data/icourse.db.enc.tmp \
-            "https://raw.githubusercontent.com/${{ github.repository }}/data/data/icourse.db.enc" \
-            || echo "Fetch from data branch failed."
-          if [ -f data/icourse.db.enc.tmp ]; then
+          if curl -fL -o data/icourse.db.gz.enc.tmp \
+               "https://raw.githubusercontent.com/${{ github.repository }}/data/data/icourse.db.gz.enc" 2>/dev/null; then
+            mv data/icourse.db.gz.enc.tmp data/icourse.db.gz.enc
+            echo "Loaded compressed database."
+          elif curl -fL -o data/icourse.db.enc.tmp \
+               "https://raw.githubusercontent.com/${{ github.repository }}/data/data/icourse.db.enc" 2>/dev/null; then
             mv data/icourse.db.enc.tmp data/icourse.db.enc
-            echo "Database loaded from data branch."
+            echo "Loaded legacy database."
           else
             echo "::error::No database found on data branch."
             exit 1
@@ -62,9 +64,14 @@ jobs:
         env:
           DB_KEY: ${{ secrets.STUID }}${{ secrets.UISPSW }}${{ secrets.DASHSCOPE_API_KEY }}${{ secrets.SMTP_PASSWORD }}
         run: |
-          openssl enc -aes-256-cbc -d -pbkdf2 \
-            -in data/icourse.db.enc -out data/icourse.db \
-            -pass env:DB_KEY
+          if [ -f data/icourse.db.gz.enc ]; then
+            openssl enc -aes-256-cbc -d -pbkdf2 \
+              -in data/icourse.db.gz.enc -out data/icourse.db.gz -pass env:DB_KEY
+            gzip -d data/icourse.db.gz
+          else
+            openssl enc -aes-256-cbc -d -pbkdf2 \
+              -in data/icourse.db.enc -out data/icourse.db -pass env:DB_KEY
+          fi
           echo "Database decrypted."
 
       - name: Export course summaries

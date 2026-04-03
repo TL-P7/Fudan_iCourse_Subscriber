@@ -3,6 +3,83 @@
  * References ICS.crypto, ICS.github, ICS.db, ICS.render globals.
  */
 
+/* ── Gzip helpers (Compression Streams API) ── */
+async function _gunzip(compressedBytes) {
+  var ds = new DecompressionStream("gzip");
+  var writer = ds.writable.getWriter();
+  writer.write(compressedBytes);
+  writer.close();
+  var chunks = [];
+  var reader = ds.readable.getReader();
+  while (true) {
+    var r = await reader.read();
+    if (r.done) break;
+    chunks.push(r.value);
+  }
+  var total = chunks.reduce(function(s, c) { return s + c.length; }, 0);
+  var result = new Uint8Array(total);
+  var offset = 0;
+  for (var i = 0; i < chunks.length; i++) {
+    result.set(chunks[i], offset);
+    offset += chunks[i].length;
+  }
+  return result;
+}
+
+async function _gzip(bytes) {
+  var cs = new CompressionStream("gzip");
+  var writer = cs.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  var chunks = [];
+  var reader = cs.readable.getReader();
+  while (true) {
+    var r = await reader.read();
+    if (r.done) break;
+    chunks.push(r.value);
+  }
+  var total = chunks.reduce(function(s, c) { return s + c.length; }, 0);
+  var result = new Uint8Array(total);
+  var offset = 0;
+  for (var i = 0; i < chunks.length; i++) {
+    result.set(chunks[i], offset);
+    offset += chunks[i].length;
+  }
+  return result;
+}
+
+/* ── IndexedDB cache for encrypted DB (avoid re-downloading 20MB+ every load) ── */
+var _idbName = "ics_cache";
+
+function _idbOpen() {
+  return new Promise(function(resolve, reject) {
+    var req = indexedDB.open(_idbName, 1);
+    req.onupgradeneeded = function() { req.result.createObjectStore("blobs"); };
+    req.onsuccess = function() { resolve(req.result); };
+    req.onerror = function() { reject(req.error); };
+  });
+}
+
+async function _idbGet(key) {
+  var db = await _idbOpen();
+  return new Promise(function(resolve) {
+    var tx = db.transaction("blobs", "readonly");
+    var req = tx.objectStore("blobs").get(key);
+    req.onsuccess = function() { resolve(req.result || null); };
+    req.onerror = function() { resolve(null); };
+  });
+}
+
+async function _idbPut(key, value) {
+  var db = await _idbOpen();
+  return new Promise(function(resolve) {
+    var tx = db.transaction("blobs", "readwrite");
+    tx.objectStore("blobs").put(value, key);
+    tx.oncomplete = function() { resolve(); };
+    tx.onerror = function() { resolve(); };
+  });
+}
+
 /* ── Credential helpers (localStorage) ── */
 const _LS = "ics_";
 const _loadCreds = () => { try { return JSON.parse(localStorage.getItem(_LS + "creds")); } catch { return null; } };
@@ -67,17 +144,42 @@ document.addEventListener("alpine:init", () => {
     async _loadDB(creds) {
       this.view = "loading"; this.error = null;
       try {
-        this.loadingMsg = "Connecting to GitHub...";
-        const { data, commitSha } = await ICS.github.fetchEncryptedDB(
+        this.loadingMsg = "Checking for updates...";
+        var remoteSha = await ICS.github.getLatestCommitSha(
+          this.repoOwner, this.repoName, this.dataBranch, creds.token
+        );
+
+        // Check IndexedDB cache
+        var cached = await _idbGet("db_cache");
+        if (cached && cached.sha === remoteSha) {
+          this.loadingMsg = "Loading cached data...";
+          this.commitSha = remoteSha;
+          await ICS.db.initDB(cached.dbBytes);
+          ICS.db.ensureSchema();
+          this.courses = ICS.db.getCourses();
+          this.view = "courses";
+          return;
+        }
+
+        this.loadingMsg = "Downloading database...";
+        const { data, commitSha, compressed } = await ICS.github.fetchEncryptedDB(
           this.repoOwner, this.repoName, this.dataBranch, creds.token
         );
         this.commitSha = commitSha;
-        this.loadingMsg = "Decrypting database...";
-        const pw = ICS.crypto.buildPassword(creds);
-        const dbBytes = await ICS.crypto.decrypt(data, pw, this.iterations);
+        this.loadingMsg = "Decrypting...";
+        var pw = ICS.crypto.buildPassword(creds);
+        var decrypted = await ICS.crypto.decrypt(data, pw, this.iterations);
+        if (compressed) {
+          this.loadingMsg = "Decompressing...";
+          decrypted = await _gunzip(decrypted);
+        }
         this.loadingMsg = "Loading data...";
-        await ICS.db.initDB(dbBytes);
+        await ICS.db.initDB(decrypted);
         ICS.db.ensureSchema();
+
+        // Cache the decrypted DB bytes for next load
+        await _idbPut("db_cache", { sha: commitSha, dbBytes: decrypted });
+
         this.courses = ICS.db.getCourses();
         this.view = "courses";
       } catch (e) {
@@ -121,13 +223,16 @@ document.addEventListener("alpine:init", () => {
         const creds = _loadCreds();
         if (!creds) throw new Error("Not authenticated");
         ICS.db.updateSummary(this.currentLecture.sub_id, this.editText);
-        const dbBytes = ICS.db.exportDB();
-        const pw = ICS.crypto.buildPassword(creds);
-        const enc = await ICS.crypto.encrypt(dbBytes, pw, this.iterations);
+        var dbBytes = ICS.db.exportDB();
+        var pw = ICS.crypto.buildPassword(creds);
+        var compressed = await _gzip(dbBytes);
+        var enc = await ICS.crypto.encrypt(compressed, pw, this.iterations);
         const sha = await ICS.github.getLatestCommitSha(this.repoOwner, this.repoName, this.dataBranch, creds.token);
         this.commitSha = await ICS.github.pushEncryptedDB(
           this.repoOwner, this.repoName, this.dataBranch, creds.token, enc, sha
         );
+        // Update cache with new DB state
+        await _idbPut("db_cache", { sha: this.commitSha, dbBytes: ICS.db.exportDB() });
         this.currentLecture = ICS.db.getLecture(this.currentLecture.sub_id);
         this.goBack();
         this._toast("Saved successfully", "success");
@@ -151,10 +256,11 @@ document.addEventListener("alpine:init", () => {
     async testAndSave() {
       this.setupTesting = true; this.setupError = "";
       try {
-        const { data, commitSha } = await ICS.github.fetchEncryptedDB(
+        const { data, commitSha, compressed } = await ICS.github.fetchEncryptedDB(
           this.repoOwner, this.repoName, this.dataBranch, this.setup.token
         );
-        await ICS.crypto.decrypt(data, ICS.crypto.buildPassword(this.setup), this.iterations);
+        var decrypted = await ICS.crypto.decrypt(data, ICS.crypto.buildPassword(this.setup), this.iterations);
+        if (compressed) decrypted = await _gunzip(decrypted);
         _saveCreds({ ...this.setup });
         _saveSettings({ owner: this.repoOwner, repo: this.repoName, branch: this.dataBranch, iterations: this.iterations });
         this.commitSha = commitSha;
@@ -179,6 +285,7 @@ document.addEventListener("alpine:init", () => {
       if (!confirm("Clear all saved credentials?")) return;
       localStorage.removeItem(_LS + "creds");
       localStorage.removeItem(_LS + "settings");
+      indexedDB.deleteDatabase(_idbName);
       this.view = "setup";
       this.setup = { token: "", stuid: "", uispsw: "", dashscope: "", smtp: "" };
     },

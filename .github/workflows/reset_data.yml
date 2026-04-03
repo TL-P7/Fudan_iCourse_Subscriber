@@ -42,12 +42,14 @@ jobs:
       - name: Fetch database from data branch
         run: |
           mkdir -p data
-          curl -fL -o data/icourse.db.enc.tmp \
-            "https://raw.githubusercontent.com/${{ github.repository }}/data/data/icourse.db.enc" \
-            || echo "Fetch from data branch failed."
-          if [ -f data/icourse.db.enc.tmp ]; then
+          if curl -fL -o data/icourse.db.gz.enc.tmp \
+               "https://raw.githubusercontent.com/${{ github.repository }}/data/data/icourse.db.gz.enc" 2>/dev/null; then
+            mv data/icourse.db.gz.enc.tmp data/icourse.db.gz.enc
+            echo "Loaded compressed database."
+          elif curl -fL -o data/icourse.db.enc.tmp \
+               "https://raw.githubusercontent.com/${{ github.repository }}/data/data/icourse.db.enc" 2>/dev/null; then
             mv data/icourse.db.enc.tmp data/icourse.db.enc
-            echo "Database loaded from data branch."
+            echo "Loaded legacy database."
           else
             echo "::error::No database found on data branch."
             exit 1
@@ -57,9 +59,14 @@ jobs:
         env:
           DB_KEY: ${{ secrets.STUID }}${{ secrets.UISPSW }}${{ secrets.DASHSCOPE_API_KEY }}${{ secrets.SMTP_PASSWORD }}
         run: |
-          openssl enc -aes-256-cbc -d -pbkdf2 \
-            -in data/icourse.db.enc -out data/icourse.db \
-            -pass env:DB_KEY
+          if [ -f data/icourse.db.gz.enc ]; then
+            openssl enc -aes-256-cbc -d -pbkdf2 \
+              -in data/icourse.db.gz.enc -out data/icourse.db.gz -pass env:DB_KEY
+            gzip -d data/icourse.db.gz
+          else
+            openssl enc -aes-256-cbc -d -pbkdf2 \
+              -in data/icourse.db.enc -out data/icourse.db -pass env:DB_KEY
+          fi
           echo "Database decrypted."
 
       - name: Reset course data
@@ -77,18 +84,19 @@ jobs:
           DB_KEY: ${{ secrets.STUID }}${{ secrets.UISPSW }}${{ secrets.DASHSCOPE_API_KEY }}${{ secrets.SMTP_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          gzip -c data/icourse.db > data/icourse.db.gz
           openssl enc -aes-256-cbc -salt -pbkdf2 \
-            -in data/icourse.db -out data/icourse.db.enc \
+            -in data/icourse.db.gz -out data/icourse.db.gz.enc \
             -pass env:DB_KEY
 
           mkdir -p /tmp/db_deploy/data
-          cp data/icourse.db.enc /tmp/db_deploy/data/
+          cp data/icourse.db.gz.enc /tmp/db_deploy/data/
           cd /tmp/db_deploy
 
           git init
           git checkout -b data
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/icourse.db.enc
+          git add data/icourse.db.gz.enc
           git commit -m "chore: reset course data (course_id=${{ inputs.course_id }})"
           git push --force "https://${{ github.actor }}:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" data

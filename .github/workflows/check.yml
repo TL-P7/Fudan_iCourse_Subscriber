@@ -59,26 +59,45 @@ jobs:
       - name: Fetch database from data branch
         run: |
           mkdir -p data
-          curl -fL -o data/icourse.db.enc.tmp "https://raw.githubusercontent.com/${{ github.repository }}/data/data/icourse.db.enc" || echo "Fetch from data branch failed, falling back."
-          if [ -f data/icourse.db.enc.tmp ]; then
+          # Try new compressed format first, then fall back to legacy
+          if curl -fL -o data/icourse.db.gz.enc.tmp \
+               "https://raw.githubusercontent.com/${{ github.repository }}/data/data/icourse.db.gz.enc" 2>/dev/null; then
+            mv data/icourse.db.gz.enc.tmp data/icourse.db.gz.enc
+            echo "Loaded compressed database from data branch."
+          elif curl -fL -o data/icourse.db.enc.tmp \
+               "https://raw.githubusercontent.com/${{ github.repository }}/data/data/icourse.db.enc" 2>/dev/null; then
             mv data/icourse.db.enc.tmp data/icourse.db.enc
-            echo "Successfully loaded latest database from data branch."
+            echo "Loaded legacy (uncompressed) database from data branch."
           else
-            echo "Using fallback database from main branch or starting fresh."
+            echo "No database found on data branch, starting fresh."
           fi
 
       - name: Decrypt database
-        if: hashFiles('data/icourse.db.enc') != ''
+        if: hashFiles('data/icourse.db.gz.enc') != '' || hashFiles('data/icourse.db.enc') != ''
         env:
           DB_KEY: ${{ secrets.STUID }}${{ secrets.UISPSW }}${{ secrets.DASHSCOPE_API_KEY }}${{ secrets.SMTP_PASSWORD }}
         run: |
-          if openssl enc -aes-256-cbc -d -pbkdf2 \
-            -in data/icourse.db.enc -out data/icourse.db \
-            -pass env:DB_KEY 2>/dev/null; then
-            echo "Database decrypted successfully."
-          else
-            echo "::warning::Decryption failed (new fork or changed secrets). Starting with fresh database."
-            rm -f data/icourse.db
+          if [ -f data/icourse.db.gz.enc ]; then
+            # New format: decrypt then decompress
+            if openssl enc -aes-256-cbc -d -pbkdf2 \
+                 -in data/icourse.db.gz.enc -out data/icourse.db.gz \
+                 -pass env:DB_KEY 2>/dev/null && \
+               gzip -d data/icourse.db.gz; then
+              echo "Database decrypted and decompressed."
+            else
+              echo "::warning::Decryption failed. Starting with fresh database."
+              rm -f data/icourse.db data/icourse.db.gz
+            fi
+          elif [ -f data/icourse.db.enc ]; then
+            # Legacy format: decrypt only
+            if openssl enc -aes-256-cbc -d -pbkdf2 \
+                 -in data/icourse.db.enc -out data/icourse.db \
+                 -pass env:DB_KEY 2>/dev/null; then
+              echo "Database decrypted (legacy format)."
+            else
+              echo "::warning::Decryption failed. Starting with fresh database."
+              rm -f data/icourse.db
+            fi
           fi
 
       - name: Record database state
@@ -124,30 +143,44 @@ jobs:
           DEPLOY_DB=data/icourse.db
           git fetch origin data --depth=1 2>/dev/null || echo "No data branch yet."
           if git rev-parse origin/data >/dev/null 2>&1; then
-            git show origin/data:data/icourse.db.enc > data/remote.db.enc 2>/dev/null || true
-            if [ -f data/remote.db.enc ] && \
+            # Try new compressed format, then legacy
+            git show origin/data:data/icourse.db.gz.enc > data/remote.gz.enc 2>/dev/null
+            git show origin/data:data/icourse.db.enc > data/remote.enc 2>/dev/null
+            # Remove empty files from failed git show
+            find data -name 'remote.*' -empty -delete 2>/dev/null || true
+            if [ -s data/remote.gz.enc ] && \
                openssl enc -aes-256-cbc -d -pbkdf2 \
-                 -in data/remote.db.enc -out data/remote.db \
-                 -pass env:DB_KEY 2>/dev/null; then
+                 -in data/remote.gz.enc -out data/remote.db.gz \
+                 -pass env:DB_KEY 2>/dev/null && \
+               gzip -d data/remote.db.gz; then
               echo "Merging local changes into latest remote database..."
+              python scripts/merge_db.py data/icourse.db data/remote.db
+              DEPLOY_DB=data/remote.db
+            elif [ -s data/remote.enc ] && \
+               openssl enc -aes-256-cbc -d -pbkdf2 \
+                 -in data/remote.enc -out data/remote.db \
+                 -pass env:DB_KEY 2>/dev/null; then
+              echo "Merging local changes into latest remote database (legacy)..."
               python scripts/merge_db.py data/icourse.db data/remote.db
               DEPLOY_DB=data/remote.db
             fi
           fi
 
+          # Compress then encrypt (new format)
+          gzip -c "$DEPLOY_DB" > data/icourse.db.gz
           openssl enc -aes-256-cbc -salt -pbkdf2 \
-            -in "$DEPLOY_DB" -out data/icourse.db.enc \
+            -in data/icourse.db.gz -out data/icourse.db.gz.enc \
             -pass env:DB_KEY
 
           echo "Deploying to data branch..."
           mkdir -p /tmp/db_deploy/data
-          cp data/icourse.db.enc /tmp/db_deploy/data/
+          cp data/icourse.db.gz.enc /tmp/db_deploy/data/
           cd /tmp/db_deploy
 
           git init
           git checkout -b data
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/icourse.db.enc
+          git add data/icourse.db.gz.enc
           git commit -m "chore: update encrypted database"
           git push --force "https://${{ github.actor }}:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" data

@@ -47,8 +47,7 @@ async function _fetchEncryptedDB(owner, repo, branch, token) {
   // 1) Get commit SHA + tree
   const commitSha = await _getLatestCommitSha(owner, repo, branch, token);
 
-  // 2) Get the tree to find the blob SHA for data/icourse.db.enc
-  //    We walk commit → tree → data/ subtree → icourse.db.enc blob
+  // 2) Walk commit → tree → data/ subtree to find the DB file
   const commitRes = await fetch(
     `${_GH_API}/repos/${owner}/${repo}/git/commits/${commitSha}`,
     { headers: _ghHeaders(token) }
@@ -63,7 +62,6 @@ async function _fetchEncryptedDB(owner, repo, branch, token) {
   if (!treeRes.ok) throw new Error(`Failed to get tree: ${treeRes.status}`);
   const treeData = await treeRes.json();
 
-  // Find "data" directory in tree
   const dataEntry = treeData.tree.find((e) => e.path === "data" && e.type === "tree");
   if (!dataEntry) throw new Error("'data/' directory not found on data branch.");
 
@@ -74,11 +72,15 @@ async function _fetchEncryptedDB(owner, repo, branch, token) {
   if (!subTreeRes.ok) throw new Error(`Failed to get data/ tree: ${subTreeRes.status}`);
   const subTree = await subTreeRes.json();
 
-  const fileEntry = subTree.tree.find((e) => e.path === "icourse.db.enc");
-  if (!fileEntry) throw new Error("icourse.db.enc not found on data branch.");
+  // Try compressed format first, then legacy
+  var fileEntry = subTree.tree.find((e) => e.path === "icourse.db.gz.enc");
+  var compressed = !!fileEntry;
+  if (!fileEntry) {
+    fileEntry = subTree.tree.find((e) => e.path === "icourse.db.enc");
+  }
+  if (!fileEntry) throw new Error("Database file not found on data branch.");
 
-  // 3) Download blob as raw binary via Git Blobs API
-  //    Using Accept: application/vnd.github.raw avoids base64 overhead
+  // 3) Download blob as raw binary
   const blobRes = await fetch(
     `${_GH_API}/repos/${owner}/${repo}/git/blobs/${fileEntry.sha}`,
     {
@@ -90,7 +92,7 @@ async function _fetchEncryptedDB(owner, repo, branch, token) {
   );
   if (!blobRes.ok) throw new Error(`Failed to download blob: ${blobRes.status}`);
   const buffer = await blobRes.arrayBuffer();
-  return { data: new Uint8Array(buffer), commitSha };
+  return { data: new Uint8Array(buffer), commitSha, compressed };
 }
 
 async function _pushEncryptedDB(
@@ -112,7 +114,7 @@ async function _pushEncryptedDB(
   const treeRes = await fetch(`${_GH_API}/repos/${owner}/${repo}/git/trees`, {
     method: "POST", headers: hdrs,
     body: JSON.stringify({
-      tree: [{ path: "data/icourse.db.enc", mode: "100644", type: "blob", sha: blobSha }],
+      tree: [{ path: "data/icourse.db.gz.enc", mode: "100644", type: "blob", sha: blobSha }],
     }),
   });
   if (!treeRes.ok) throw new Error(`Failed to create tree: ${treeRes.status}`);
