@@ -317,7 +317,7 @@
         <!-- Rendered summary -->
         <div class="prose"
              x-html="renderMd(currentLecture.summary || '')"
-             x-effect="$nextTick(() => activateKaTeX($el))">
+             x-effect="currentLecture && $nextTick(() => activateKaTeX($el))">
         </div>
 
         <!-- FAB edit button (mobile) -->
@@ -358,7 +358,7 @@
     <div x-show="editPreview" class="flex-1 overflow-y-auto p-4">
       <div class="prose max-w-2xl mx-auto"
            x-html="renderMd(editText)"
-           x-effect="if (editPreview) $nextTick(() => activateKaTeX($el))">
+           x-effect="editPreview && (editText, $nextTick(() => activateKaTeX($el)))">
       </div>
     </div>
   </div>
