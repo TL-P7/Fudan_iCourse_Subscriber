@@ -122,6 +122,7 @@ document.addEventListener("alpine:init", () => {
     currentCourse: null, currentLecture: null,
     searchQuery: "", searchResults: [],
     editText: "", editPreview: false, saving: false,
+    showTranscript: false,
     commitSha: null,
     setup: { token: "", stuid: "", uispsw: "", dashscope: "", smtp: "" },
     setupError: "", setupTesting: false,
@@ -201,7 +202,7 @@ document.addEventListener("alpine:init", () => {
         this.currentCourse = this.courses.find(x => x.course_id === params.courseId) || { course_id: params.courseId, title: "...", teacher: "" };
         this.lectures = ICS.db.getLectures(params.courseId);
       }
-      else if (view === "detail" && params.subId) { this.currentLecture = ICS.db.getLecture(params.subId); }
+      else if (view === "detail" && params.subId) { this.currentLecture = ICS.db.getLecture(params.subId); this.showTranscript = false; }
       else if (view === "edit") { this.editText = this.currentLecture?.summary || ""; this.editPreview = false; }
       this.view = view;
     },
