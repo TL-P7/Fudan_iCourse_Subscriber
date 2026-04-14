@@ -142,8 +142,9 @@ jobs:
           DEPLOY_DB=data/icourse.db
           git fetch origin data --depth=1 2>/dev/null || echo "No data branch yet."
           if git rev-parse origin/data >/dev/null 2>&1; then
-            git show origin/data:data/icourse.db.gz.enc > data/remote.gz.enc 2>/dev/null
-            git show origin/data:data/icourse.db.enc > data/remote.enc 2>/dev/null
+            git show origin/data:data/icourse.db.gz.enc > data/remote.gz.enc 2>/dev/null || true
+            git show origin/data:data/icourse.db.enc > data/remote.enc 2>/dev/null || true
+            # Remove empty files from failed git show
             find data -name 'remote.*' -empty -delete 2>/dev/null || true
             if [ -s data/remote.gz.enc ] && \
                openssl enc -aes-256-cbc -d -pbkdf2 \
