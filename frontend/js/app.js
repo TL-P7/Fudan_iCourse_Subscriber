@@ -231,7 +231,9 @@ const _EXPORT_PDF_OVERRIDES_CSS = `
   page-break-inside: avoid;
 }
 `;
+// Keep mount below normal content while still renderable by html2canvas.
 const _EXPORT_HIDDEN_MOUNT_Z_INDEX = "-2147483647";
+// A4 width in CSS px at 96 DPI (210mm ≈ 794px).
 const _EXPORT_CANVAS_WIDTH = "794";
 
 /* ── Alpine app ── */
