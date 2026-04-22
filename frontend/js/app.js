@@ -122,7 +122,7 @@ function _escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
-function _formatExportDate(dateText, processedAt) {
+function _getLectureDateString(dateText, processedAt) {
   if (dateText) return String(dateText);
   if (!processedAt) return "";
   const d = new Date(processedAt);
@@ -237,7 +237,7 @@ document.addEventListener("alpine:init", () => {
     cancelEdit() { this.goBack(); },
 
     getExportableLectures() {
-      return (this.lectures || []).filter((lec) => lec.state === "ready" && lec.summary && lec.summary.trim());
+      return (this.lectures || []).filter((lec) => lec.summary && lec.summary.trim());
     },
     openExportDialog() {
       const list = this.getExportableLectures();
@@ -263,17 +263,19 @@ document.addEventListener("alpine:init", () => {
       return this.getExportableLectures().filter((lec) => this.exportSelection[lec.sub_id]).length;
     },
     _buildExportHtml(lectures) {
-      const courseTitle = this.currentCourse?.title || "Course";
+      const courseTitle = this.currentCourse?.title || "课程";
       const teacher = this.currentCourse?.teacher || "";
       const sections = lectures.map((lec) => {
-        const dateText = _formatExportDate(lec.date, lec.processed_at);
+        const dateText = _getLectureDateString(lec.date, lec.processed_at);
         const title = _escapeHtml(lec.sub_title || "Untitled");
-        const subtitle = dateText ? `<small>${_escapeHtml(dateText)}</small>` : "";
+        const subtitle = dateText ? `<small>(${_escapeHtml(dateText)})</small>` : "";
+        const titleLine = subtitle ? `${title} ${subtitle}` : title;
         return `
-          <section class="lecture">
-            <h2>${title} ${subtitle}</h2>
+          <section>
+            <h2>${titleLine}</h2>
             ${ICS.render.renderMarkdown(lec.summary || "")}
           </section>
+          <hr>
         `;
       }).join("");
       return `
@@ -284,18 +286,20 @@ document.addEventListener("alpine:init", () => {
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif; color: #111827; }
     h1 { font-size: 24px; margin: 0; }
-    .meta { color: #6b7280; margin: 8px 0 18px; font-size: 14px; }
-    .lecture { page-break-inside: avoid; margin: 0 0 16px; padding: 0 0 12px; border-bottom: 1px solid #e5e7eb; }
-    .lecture h2 { font-size: 18px; margin: 0 0 10px; }
-    .lecture h2 small { font-size: 12px; font-weight: 400; color: #6b7280; margin-left: 6px; }
+    .meta { color: #6b7280; margin: 8px 0 16px; font-size: 14px; }
+    section { page-break-inside: avoid; }
+    h2 { font-size: 18px; margin: 14px 0 10px; }
+    h2 small { font-size: 12px; font-weight: 400; color: #6b7280; margin-left: 6px; }
+    hr { border: none; border-top: 1px solid #e5e7eb; margin: 12px 0; }
     p { line-height: 1.7; }
-    pre { white-space: pre-wrap; word-break: break-word; }
+    pre { white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; }
     img { max-width: 100%; }
   </style>
 </head>
 <body>
   <h1>${_escapeHtml(courseTitle)}</h1>
   <p class="meta">${teacher ? `任课教师：${_escapeHtml(teacher)}` : ""}</p>
+  <hr>
   ${sections}
 </body>
 </html>
@@ -322,9 +326,8 @@ document.addEventListener("alpine:init", () => {
         mount.style.width = "794px";
         mount.innerHTML = this._buildExportHtml(selected);
         document.body.appendChild(mount);
-        const fileBase = (this.currentCourse?.title || "course_summaries")
-          .replace(/[\\/:*?"<>|]+/g, "_")
-          .trim() || "course_summaries";
+        const fileBase = (this.currentCourse?.title?.trim() || "course_summaries")
+          .replace(/[\\/:*?"<>|]+/g, "_");
         await window.html2pdf()
           .set({
             margin: [12, 10, 12, 10],
