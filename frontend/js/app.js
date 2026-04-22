@@ -220,10 +220,16 @@ const _EXPORT_PDF_OVERRIDES_CSS = `
 .ics-export-root h1,
 .ics-export-root h2,
 .ics-export-root h3,
-.ics-export-root h4 { break-after: avoid-page; }
+.ics-export-root h4 {
+  break-after: avoid;
+  page-break-after: avoid;
+}
 .ics-export-root table,
 .ics-export-root pre,
-.ics-export-root blockquote { break-inside: avoid; }
+.ics-export-root blockquote {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
 `;
 
 /* ── Alpine app ── */
