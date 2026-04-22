@@ -215,7 +215,6 @@ const _EXPORT_SHARED_CSS = `
 `;
 
 const _EXPORT_PDF_OVERRIDES_CSS = `
-.ics-export-root img { max-width: 100% !important; height: auto !important; }
 .ics-export-root { font-family: "Microsoft YaHei", sans-serif; }
 `;
 
