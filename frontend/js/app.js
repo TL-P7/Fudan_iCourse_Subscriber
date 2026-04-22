@@ -216,7 +216,25 @@ const _EXPORT_SHARED_CSS = `
 
 const _EXPORT_PDF_OVERRIDES_CSS = `
 .ics-export-root { font-family: "Microsoft YaHei", sans-serif; }
+@page { size: A4; margin: 12mm 10mm; }
+.ics-export-root h1,
+.ics-export-root h2,
+.ics-export-root h3,
+.ics-export-root h4 {
+  break-after: avoid;
+  page-break-after: avoid;
+}
+.ics-export-root table,
+.ics-export-root pre,
+.ics-export-root blockquote {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
 `;
+// Near INT32_MIN; keep mount far behind normal content but still rendered by html2canvas.
+const _EXPORT_MOUNT_Z_INDEX = "-2147483647";
+// A4 width in CSS px at 96 DPI: 210 * 96 / 25.4 ≈ 794.
+const _EXPORT_CANVAS_WIDTH = 794;
 
 /* ── Alpine app ── */
 document.addEventListener("alpine:init", () => {
@@ -359,10 +377,8 @@ document.addEventListener("alpine:init", () => {
         const subtitle = dateText ? `<small>(${_escapeHtml(dateText)})</small>` : "";
         const titleLine = subtitle ? `${title} ${subtitle}` : title;
         return `
-          <section class="ics-export-section">
-            <h2>${titleLine}</h2>
-            ${ICS.render.renderMarkdown(lec.summary || "")}
-          </section>
+          <h2>${titleLine}</h2>
+          ${ICS.render.renderMarkdown(lec.summary || "")}
           <hr>
         `;
       }).join("");
@@ -372,7 +388,6 @@ document.addEventListener("alpine:init", () => {
     ${_EXPORT_SHARED_CSS}
     ${_EXPORT_PDF_OVERRIDES_CSS}
     .ics-export-root { background: #fff; }
-    .ics-export-section { page-break-inside: avoid; }
   </style>
   <h1>${_escapeHtml(courseTitle)}</h1>
   <p>${teacher ? `任课教师：${_escapeHtml(teacher)}` : ""}</p>
@@ -400,10 +415,9 @@ document.addEventListener("alpine:init", () => {
         // Keep export node in viewport; html2canvas may output blank when source is fully off-screen.
         mount.style.left = "0";
         mount.style.top = "0";
-        mount.style.width = "794px";
-        mount.style.opacity = "0";
+        mount.style.width = _EXPORT_CANVAS_WIDTH + "px";
         mount.style.pointerEvents = "none";
-        mount.style.zIndex = "-1";
+        mount.style.zIndex = _EXPORT_MOUNT_Z_INDEX;
         mount.innerHTML = this._buildExportHtml(selected);
         document.body.appendChild(mount);
         const exportNode = mount.querySelector(".ics-export-root");
@@ -416,9 +430,10 @@ document.addEventListener("alpine:init", () => {
             margin: [12, 10, 12, 10],
             filename: fileBase + "_summaries.pdf",
             image: { type: "jpeg", quality: 0.98 },
-            html2canvas: { scale: 2, useCORS: true },
+            html2canvas: { scale: 2, useCORS: true, windowWidth: _EXPORT_CANVAS_WIDTH },
             jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-            pagebreak: { mode: ["css", "legacy"] },
+            // Use CSS mode only: legacy mode may insert extra blank pages with long markdown sections.
+            pagebreak: { mode: ["css"] },
           })
           .from(exportNode)
           .save();
