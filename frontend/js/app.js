@@ -130,6 +130,94 @@ function _getLectureDateString(dateText, processedAt) {
   return d.toISOString().slice(0, 10);
 }
 
+const _EXPORT_SHARED_CSS = `
+.ics-export-root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.7;
+  color: #1a1a1a;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px;
+}
+.ics-export-root h2 {
+  color: #2c3e50;
+  border-bottom: 2px solid #3498db;
+  padding-bottom: 8px;
+  margin-top: 32px;
+}
+.ics-export-root h2 small {
+  color: #7f8c8d;
+  font-weight: normal;
+}
+.ics-export-root h3 {
+  color: #34495e;
+  margin-top: 24px;
+}
+.ics-export-root h3 small {
+  color: #7f8c8d;
+  font-weight: normal;
+}
+.ics-export-root h4 { color: #555; margin-top: 18px; }
+.ics-export-root hr {
+  border: none;
+  border-top: 1px solid #e0e0e0;
+  margin: 28px 0;
+}
+.ics-export-root strong { color: #c0392b; }
+.ics-export-root table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+.ics-export-root th, .ics-export-root td {
+  border: 1px solid #ddd;
+  padding: 8px 12px;
+  text-align: left;
+}
+.ics-export-root th {
+  background: #f5f6fa;
+  font-weight: 600;
+}
+.ics-export-root tr:nth-child(even) { background: #fafafa; }
+.ics-export-root pre {
+  background: #f8f8f8;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+}
+.ics-export-root code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 13px;
+}
+.ics-export-root p code {
+  background: #f0f0f0;
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+.ics-export-root blockquote {
+  border-left: 4px solid #3498db;
+  margin: 12px 0;
+  padding: 8px 16px;
+  background: #f8f9fa;
+  color: #555;
+}
+.ics-export-root ul, .ics-export-root ol { padding-left: 24px; }
+.ics-export-root li { margin-bottom: 4px; }
+.ics-export-root img { max-width: 100% !important; height: auto !important; }
+`;
+
+const _EXPORT_PDF_OVERRIDES_CSS = `
+.ics-export-root { font-family: "Microsoft YaHei", sans-serif; }
+`;
+
 /* ── Alpine app ── */
 document.addEventListener("alpine:init", () => {
   Alpine.data("app", () => ({
@@ -271,7 +359,7 @@ document.addEventListener("alpine:init", () => {
         const subtitle = dateText ? `<small>(${_escapeHtml(dateText)})</small>` : "";
         const titleLine = subtitle ? `${title} ${subtitle}` : title;
         return `
-          <section>
+          <section class="ics-export-section">
             <h2>${titleLine}</h2>
             ${ICS.render.renderMarkdown(lec.summary || "")}
           </section>
@@ -279,30 +367,18 @@ document.addEventListener("alpine:init", () => {
         `;
       }).join("");
       return `
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
+<div class="ics-export-root">
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif; color: #111827; }
-    h1 { font-size: 24px; margin: 0; }
-    .meta { color: #6b7280; margin: 8px 0 16px; font-size: 14px; }
-    section { page-break-inside: avoid; }
-    h2 { font-size: 18px; margin: 14px 0 10px; }
-    h2 small { font-size: 12px; font-weight: 400; color: #6b7280; margin-left: 6px; }
-    hr { border: none; border-top: 1px solid #e5e7eb; margin: 12px 0; }
-    p { line-height: 1.7; }
-    pre { white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; }
-    img { max-width: 100%; }
+    ${_EXPORT_SHARED_CSS}
+    ${_EXPORT_PDF_OVERRIDES_CSS}
+    .ics-export-root { background: #fff; }
+    .ics-export-section { page-break-inside: avoid; }
   </style>
-</head>
-<body>
   <h1>${_escapeHtml(courseTitle)}</h1>
-  <p class="meta">${teacher ? `任课教师：${_escapeHtml(teacher)}` : ""}</p>
+  <p>${teacher ? `任课教师：${_escapeHtml(teacher)}` : ""}</p>
   <hr>
   ${sections}
-</body>
-</html>
+</div>
       `;
     },
     async exportSelectedToPdf() {
@@ -321,11 +397,18 @@ document.addEventListener("alpine:init", () => {
       try {
         mount = document.createElement("div");
         mount.style.position = "fixed";
-        mount.style.left = "-10000px";
+        // Keep export node in viewport; html2canvas may output blank when source is fully off-screen.
+        mount.style.left = "0";
         mount.style.top = "0";
         mount.style.width = "794px";
+        mount.style.opacity = "0";
+        mount.style.pointerEvents = "none";
+        mount.style.zIndex = "-1";
         mount.innerHTML = this._buildExportHtml(selected);
         document.body.appendChild(mount);
+        const exportNode = mount.querySelector(".ics-export-root");
+        if (!exportNode) throw new Error("Failed to build export content");
+        ICS.render.activateKaTeX(exportNode);
         const fileBase = (this.currentCourse?.title?.trim() || "course_summaries")
           .replace(/[\\/:*?"<>|]+/g, "_");
         await window.html2pdf()
@@ -337,7 +420,7 @@ document.addEventListener("alpine:init", () => {
             jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
             pagebreak: { mode: ["css", "legacy"] },
           })
-          .from(mount.firstElementChild || mount)
+          .from(exportNode)
           .save();
         this.exportDialogOpen = false;
         this._toast("PDF exported", "success");
