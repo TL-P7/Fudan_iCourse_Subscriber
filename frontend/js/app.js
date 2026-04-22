@@ -406,7 +406,7 @@ document.addEventListener("alpine:init", () => {
         mount.style.zIndex = "-1";
         mount.innerHTML = this._buildExportHtml(selected);
         document.body.appendChild(mount);
-        const exportNode = mount.querySelector(".ics-export-root") || mount;
+        const exportNode = mount.querySelector(".ics-export-root");
         ICS.render.activateKaTeX(exportNode);
         const fileBase = (this.currentCourse?.title?.trim() || "course_summaries")
           .replace(/[\\/:*?"<>|]+/g, "_");
