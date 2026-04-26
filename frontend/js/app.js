@@ -130,111 +130,14 @@ function _getLectureDateString(dateText, processedAt) {
   return d.toISOString().slice(0, 10);
 }
 
-const _EXPORT_SHARED_CSS = `
-.ics-export-root {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-               "Helvetica Neue", Arial, sans-serif;
-  font-size: 15px;
-  line-height: 1.7;
-  color: #1a1a1a;
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 20px;
-}
-.ics-export-root h2 {
-  color: #2c3e50;
-  border-bottom: 2px solid #3498db;
-  padding-bottom: 8px;
-  margin-top: 32px;
-}
-.ics-export-root h2 small {
-  color: #7f8c8d;
-  font-weight: normal;
-}
-.ics-export-root h3 {
-  color: #34495e;
-  margin-top: 24px;
-}
-.ics-export-root h3 small {
-  color: #7f8c8d;
-  font-weight: normal;
-}
-.ics-export-root h4 { color: #555; margin-top: 18px; }
-.ics-export-root hr {
-  border: none;
-  border-top: 1px solid #e0e0e0;
-  margin: 28px 0;
-}
-.ics-export-root strong { color: #c0392b; }
-.ics-export-root table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 12px 0;
-}
-.ics-export-root th, .ics-export-root td {
-  border: 1px solid #ddd;
-  padding: 8px 12px;
-  text-align: left;
-}
-.ics-export-root th {
-  background: #f5f6fa;
-  font-weight: 600;
-}
-.ics-export-root tr:nth-child(even) { background: #fafafa; }
-.ics-export-root pre {
-  background: #f8f8f8;
-  border: 1px solid #e0e0e0;
-  border-radius: 4px;
-  padding: 12px 16px;
-  overflow-x: auto;
-  font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-  word-wrap: break-word;
-}
-.ics-export-root code {
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  font-size: 13px;
-}
-.ics-export-root p code {
-  background: #f0f0f0;
-  padding: 2px 5px;
-  border-radius: 3px;
-}
-.ics-export-root blockquote {
-  border-left: 4px solid #3498db;
-  margin: 12px 0;
-  padding: 8px 16px;
-  background: #f8f9fa;
-  color: #555;
-}
-.ics-export-root ul, .ics-export-root ol { padding-left: 24px; }
-.ics-export-root li { margin-bottom: 4px; }
-.ics-export-root img { max-width: 100% !important; height: auto !important; }
-`;
-
-const _EXPORT_PDF_OVERRIDES_CSS = `
-.ics-export-root { font-family: "Microsoft YaHei", sans-serif; }
-@page { size: A4; margin: 12mm 10mm; }
-.ics-export-root h1,
-.ics-export-root h2,
-.ics-export-root h3,
-.ics-export-root h4 {
-  break-after: avoid;
-  page-break-after: avoid;
-}
-.ics-export-root table,
-.ics-export-root pre,
-.ics-export-root blockquote {
-  break-inside: avoid;
-  page-break-inside: avoid;
-}
-`;
-// Near INT32_MIN; keep mount far behind normal content but still rendered by html2canvas.
-const _EXPORT_MOUNT_Z_INDEX = "-2147483647";
-// A4 width in CSS px at 96 DPI: 210 * 96 / 25.4 ≈ 794.
+// A4 width in CSS px at 96 DPI: 210 * 96 / 25.4 ≈ 794.  Drives both the
+// mount width and html2canvas windowWidth so layout in the capture iframe
+// matches what the user sees.  Export styles live in frontend/css/export.css
+// (loaded via <link> so html2canvas inherits them when cloning the document).
 const _EXPORT_CANVAS_WIDTH = 794;
+// Stable id used by exportSelectedToPdf's onclone hook to find the mount in
+// the cloned document and restore its opacity for capture.
+const _EXPORT_MOUNT_ID = "ics-pdf-export-mount";
 
 /* ── Alpine app ── */
 document.addEventListener("alpine:init", () => {
@@ -382,13 +285,11 @@ document.addEventListener("alpine:init", () => {
           <hr>
         `;
       }).join("");
+      // Mirrors scripts/export_course.py:_build_html — H1 + teacher line + hr,
+      // then per-lecture H2 with date in <small>, markdown body, hr.  Styling
+      // comes from frontend/css/export.css (scoped under .ics-export-root).
       return `
 <div class="ics-export-root">
-  <style>
-    ${_EXPORT_SHARED_CSS}
-    ${_EXPORT_PDF_OVERRIDES_CSS}
-    .ics-export-root { background: #fff; }
-  </style>
   <h1>${_escapeHtml(courseTitle)}</h1>
   <p>${teacher ? `任课教师：${_escapeHtml(teacher)}` : ""}</p>
   <hr>
@@ -410,19 +311,28 @@ document.addEventListener("alpine:init", () => {
       this.exportingPdf = true;
       let mount = null;
       try {
+        // Mount on-screen at top-left so html2canvas measures real layout
+        // (off-screen mounts have produced blank captures in past attempts),
+        // but hide visually with opacity:0.  The onclone hook below restores
+        // opacity inside the capture clone so html2canvas paints content.
         mount = document.createElement("div");
+        mount.id = _EXPORT_MOUNT_ID;
         mount.style.position = "fixed";
-        // Keep export node in viewport; html2canvas may output blank when source is fully off-screen.
         mount.style.left = "0";
         mount.style.top = "0";
         mount.style.width = _EXPORT_CANVAS_WIDTH + "px";
+        mount.style.opacity = "0";
         mount.style.pointerEvents = "none";
-        mount.style.zIndex = _EXPORT_MOUNT_Z_INDEX;
         mount.innerHTML = this._buildExportHtml(selected);
         document.body.appendChild(mount);
         const exportNode = mount.querySelector(".ics-export-root");
         if (!exportNode) throw new Error("Failed to build export content");
         ICS.render.activateKaTeX(exportNode);
+
+        // Let the browser lay out (and paint) the just-injected DOM before
+        // html2canvas measures it.  Two rAFs guarantee at least one paint.
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
         const fileBase = (this.currentCourse?.title?.trim() || "course_summaries")
           .replace(/[\\/:*?"<>|]+/g, "_");
         await window.html2pdf()
@@ -430,10 +340,24 @@ document.addEventListener("alpine:init", () => {
             margin: [12, 10, 12, 10],
             filename: fileBase + "_summaries.pdf",
             image: { type: "jpeg", quality: 0.98 },
-            html2canvas: { scale: 2, useCORS: true, windowWidth: _EXPORT_CANVAS_WIDTH },
+            html2canvas: {
+              scale: 2,
+              useCORS: true,
+              windowWidth: _EXPORT_CANVAS_WIDTH,
+              // The on-screen mount carries opacity:0 to stay invisible to
+              // the user; restore it inside the cloned capture document so
+              // the rendered canvas isn't transparent.
+              onclone: (doc) => {
+                const m = doc.getElementById(_EXPORT_MOUNT_ID);
+                if (m) m.style.opacity = "1";
+              },
+            },
             jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-            // Use CSS mode only: legacy mode may insert extra blank pages with long markdown sections.
-            pagebreak: { mode: ["css"] },
+            // Default ["css", "legacy"] handles long markdown sections
+            // reliably.  "css"-only mode combined with break-after: avoid on
+            // every heading produced multi-page blank PDFs (the algorithm
+            // pushed each section forward when it hit a page boundary).
+            pagebreak: { mode: ["css", "legacy"] },
           })
           .from(exportNode)
           .save();
