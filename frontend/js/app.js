@@ -113,32 +113,6 @@ function _highlightSnippet(text, query, radius) {
   return snip.replace(re, "<mark>$1</mark>");
 }
 
-function _escapeHtml(s) {
-  return String(s || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function _getLectureDateString(dateText, processedAt) {
-  if (dateText) return String(dateText);
-  if (!processedAt) return "";
-  const d = new Date(processedAt);
-  if (Number.isNaN(d.getTime())) return String(processedAt);
-  return d.toISOString().slice(0, 10);
-}
-
-// A4 width in CSS px at 96 DPI: 210 * 96 / 25.4 ≈ 794.  Drives both the
-// mount width and html2canvas windowWidth so layout in the capture iframe
-// matches what the user sees.  Export styles live in frontend/css/export.css
-// (loaded via <link> so html2canvas inherits them when cloning the document).
-const _EXPORT_CANVAS_WIDTH = 794;
-// Stable id used by exportSelectedToPdf's onclone hook to find the mount in
-// the cloned document and restore its opacity for capture.
-const _EXPORT_MOUNT_ID = "ics-pdf-export-mount";
-
 /* ── Alpine app ── */
 document.addEventListener("alpine:init", () => {
   Alpine.data("app", () => ({
@@ -271,102 +245,43 @@ document.addEventListener("alpine:init", () => {
     selectedExportCount() {
       return this.getExportableLectures().filter((lec) => this.exportSelection[lec.sub_id]).length;
     },
-    _buildExportHtml(lectures) {
-      const courseTitle = this.currentCourse?.title || "课程";
-      const teacher = this.currentCourse?.teacher || "";
-      const sections = lectures.map((lec) => {
-        const dateText = _getLectureDateString(lec.date, lec.processed_at);
-        const title = _escapeHtml(lec.sub_title || "Untitled");
-        const subtitle = dateText ? `<small>(${_escapeHtml(dateText)})</small>` : "";
-        const titleLine = subtitle ? `${title} ${subtitle}` : title;
-        return `
-          <h2>${titleLine}</h2>
-          ${ICS.render.renderMarkdown(lec.summary || "")}
-          <hr>
-        `;
-      }).join("");
-      // Mirrors scripts/export_course.py:_build_html — H1 + teacher line + hr,
-      // then per-lecture H2 with date in <small>, markdown body, hr.  Styling
-      // comes from frontend/css/export.css (scoped under .ics-export-root).
-      return `
-<div class="ics-export-root">
-  <h1>${_escapeHtml(courseTitle)}</h1>
-  <p>${teacher ? `任课教师：${_escapeHtml(teacher)}` : ""}</p>
-  <hr>
-  ${sections}
-</div>
-      `;
-    },
     async exportSelectedToPdf() {
+      // Triggers .github/workflows/export.yml via workflow_dispatch.  The
+      // workflow runs scripts/export_course.py (WeasyPrint) and emails the
+      // PDF to RECEIVER_EMAIL — same output and same code path as a manual
+      // run from the Actions UI.  We dropped the in-browser html2pdf.js
+      // approach because the screenshot-based pipeline produced blank PDFs
+      // unreliably; routing through Actions reuses the working tech stack.
       if (this.exportingPdf) return;
-      if (!window.html2pdf) {
-        this._toast("PDF library failed to load", "error");
-        return;
-      }
-      const selected = this.getExportableLectures().filter((lec) => this.exportSelection[lec.sub_id]);
+      const selected = this.getExportableLectures().filter(
+        (lec) => this.exportSelection[lec.sub_id]
+      );
       if (!selected.length) {
         this._toast("Please select at least one lecture", "error");
         return;
       }
+      const creds = _loadCreds();
+      if (!creds?.token) {
+        this._toast("Not authenticated", "error");
+        return;
+      }
       this.exportingPdf = true;
-      let mount = null;
       try {
-        // Mount on-screen at top-left so html2canvas measures real layout
-        // (off-screen mounts have produced blank captures in past attempts),
-        // but hide visually with opacity:0.  The onclone hook below restores
-        // opacity inside the capture clone so html2canvas paints content.
-        mount = document.createElement("div");
-        mount.id = _EXPORT_MOUNT_ID;
-        mount.style.position = "fixed";
-        mount.style.left = "0";
-        mount.style.top = "0";
-        mount.style.width = _EXPORT_CANVAS_WIDTH + "px";
-        mount.style.opacity = "0";
-        mount.style.pointerEvents = "none";
-        mount.innerHTML = this._buildExportHtml(selected);
-        document.body.appendChild(mount);
-        const exportNode = mount.querySelector(".ics-export-root");
-        if (!exportNode) throw new Error("Failed to build export content");
-        ICS.render.activateKaTeX(exportNode);
-
-        // Let the browser lay out (and paint) the just-injected DOM before
-        // html2canvas measures it.  Two rAFs guarantee at least one paint.
-        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-
-        const fileBase = (this.currentCourse?.title?.trim() || "course_summaries")
-          .replace(/[\\/:*?"<>|]+/g, "_");
-        await window.html2pdf()
-          .set({
-            margin: [12, 10, 12, 10],
-            filename: fileBase + "_summaries.pdf",
-            image: { type: "jpeg", quality: 0.98 },
-            html2canvas: {
-              scale: 2,
-              useCORS: true,
-              windowWidth: _EXPORT_CANVAS_WIDTH,
-              // The on-screen mount carries opacity:0 to stay invisible to
-              // the user; restore it inside the cloned capture document so
-              // the rendered canvas isn't transparent.
-              onclone: (doc) => {
-                const m = doc.getElementById(_EXPORT_MOUNT_ID);
-                if (m) m.style.opacity = "1";
-              },
-            },
-            jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-            // Default ["css", "legacy"] handles long markdown sections
-            // reliably.  "css"-only mode combined with break-after: avoid on
-            // every heading produced multi-page blank PDFs (the algorithm
-            // pushed each section forward when it hit a page boundary).
-            pagebreak: { mode: ["css", "legacy"] },
-          })
-          .from(exportNode)
-          .save();
+        const subIds = selected.map((lec) => String(lec.sub_id)).join(",");
+        // Workflow files live on the default branch (main).  Surfaced as a
+        // hardcoded "main" for now; expose as a setting if users rename it.
+        await ICS.github.triggerExportWorkflow(
+          this.repoOwner, this.repoName, "main", creds.token,
+          this.currentCourse.course_id, true, subIds
+        );
         this.exportDialogOpen = false;
-        this._toast("PDF exported", "success");
+        this._toast(
+          "已触发后台导出，PDF 将在 1-3 分钟内发送到 RECEIVER_EMAIL",
+          "success"
+        );
       } catch (e) {
         this._toast(e?.message || "Export failed", "error");
       } finally {
-        if (mount && mount.parentNode) mount.parentNode.removeChild(mount);
         this.exportingPdf = false;
       }
     },

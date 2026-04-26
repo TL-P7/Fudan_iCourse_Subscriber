@@ -150,9 +150,51 @@ function _uint8ToBase64(bytes) {
   return btoa(binary);
 }
 
+async function _triggerExportWorkflow(
+  owner, repo, ref, token, courseId, exportPdf, subIds
+) {
+  // Fires the existing .github/workflows/export.yml workflow_dispatch.
+  // The workflow runs scripts/export_course.py (WeasyPrint) and emails
+  // the resulting PDF to RECEIVER_EMAIL — same output the user gets when
+  // triggering the workflow manually from the Actions UI.
+  //
+  // Requires the PAT to grant Actions: Write (in addition to Contents:RW).
+  const url = `${_GH_API}/repos/${owner}/${repo}/actions/workflows/export.yml/dispatches`;
+  const payload = {
+    ref,
+    inputs: {
+      course_id: String(courseId),
+      export_pdf: !!exportPdf,
+      sub_ids: subIds || "",
+    },
+  };
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ..._ghHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (res.status === 204) return; // success — workflow_dispatch returns 204 No Content
+  const body = await res.text();
+  if (res.status === 403 || res.status === 404) {
+    throw new Error(
+      "无法触发导出 workflow。请确认你的 GitHub PAT 已开启 " +
+      "Actions: Read and write 权限（Contents 权限不足以触发 workflow）。" +
+      `服务端返回：${res.status} ${body}`
+    );
+  }
+  if (res.status === 422) {
+    throw new Error(
+      "触发失败 (422)：通常是 inputs 不匹配 workflow 定义，或 export.yml " +
+      `不存在于指定分支 '${ref}'。服务端返回：${body}`
+    );
+  }
+  throw new Error(`GitHub API error ${res.status}: ${body}`);
+}
+
 window.ICS.github = {
   detectRepo: _detectRepo,
   getLatestCommitSha: _getLatestCommitSha,
   fetchEncryptedDB: _fetchEncryptedDB,
   pushEncryptedDB: _pushEncryptedDB,
+  triggerExportWorkflow: _triggerExportWorkflow,
 };

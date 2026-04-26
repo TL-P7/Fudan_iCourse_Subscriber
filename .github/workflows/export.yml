@@ -12,6 +12,11 @@ on:
         required: false
         type: boolean
         default: false
+      sub_ids:
+        description: "Optional comma-separated lecture sub_ids to filter (default: all summarized lectures)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -80,9 +85,14 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
           EXPORT_COURSE_ID: ${{ inputs.course_id }}
+          EXPORT_SUB_IDS: ${{ inputs.sub_ids }}
         run: |
+          PDF_FLAG=""
           if [ "${{ inputs.export_pdf }}" = "true" ]; then
-            python scripts/export_course.py --course-id "$EXPORT_COURSE_ID" --pdf
+            PDF_FLAG="--pdf"
+          fi
+          if [ -n "$EXPORT_SUB_IDS" ]; then
+            python scripts/export_course.py --course-id "$EXPORT_COURSE_ID" --sub-ids "$EXPORT_SUB_IDS" $PDF_FLAG
           else
-            python scripts/export_course.py --course-id "$EXPORT_COURSE_ID"
+            python scripts/export_course.py --course-id "$EXPORT_COURSE_ID" $PDF_FLAG
           fi

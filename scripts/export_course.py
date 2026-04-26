@@ -4,9 +4,13 @@ Usage:
     python scripts/export_course.py --course-id 30004
     python scripts/export_course.py --course-id 30004,30005
     python scripts/export_course.py --course-id 30004,30005 --pdf
+    python scripts/export_course.py --course-id 30004 --sub-ids 1,2,5
 
 Options:
     --course-id   Comma-separated course IDs to export (required).
+    --sub-ids     Optional comma-separated lecture sub_ids.  When set, only
+                  lectures with matching sub_id are exported.  Used by the
+                  frontend "导出" dialog to honour per-lecture selection.
     --pdf         Convert summaries to PDF and send as attachment.
                   Without this flag the summaries are sent as HTML emails.
     --db          Database path (default: data/icourse.db).
@@ -160,10 +164,17 @@ def _safe_filename(title: str) -> str:
     return "".join(c if c.isalnum() or c in " _-" else "_" for c in title)
 
 
-def _query_course(db: Database, course_id: str) -> tuple[str, str, list[dict]] | None:
+def _query_course(db: Database, course_id: str,
+                  sub_ids: list[str] | None = None) -> tuple[str, str, list[dict]] | None:
     """Return ``(course_title, teacher, lectures)`` for *course_id*.
 
     Returns ``None`` if the course is missing or has no summaries.
+
+    Args:
+        sub_ids: When provided, restrict the result to lectures whose
+                 ``sub_id`` is in the list.  String comparison — pass the
+                 same form the database stores (the schema treats sub_id
+                 as TEXT/INTEGER interchangeably).
     """
     course = db.conn.execute(
         "SELECT * FROM courses WHERE course_id = ?", (course_id,)
@@ -184,6 +195,10 @@ def _query_course(db: Database, course_id: str) -> tuple[str, str, list[dict]] |
     ).fetchall()
     lectures = [dict(row) for row in rows]
 
+    if sub_ids:
+        wanted = {str(s) for s in sub_ids}
+        lectures = [lec for lec in lectures if str(lec["sub_id"]) in wanted]
+
     if not lectures:
         print(f"No summaries found for course {course_id} ({course_title}) – skipping.")
         return None
@@ -197,6 +212,12 @@ def main():
     parser.add_argument(
         "--course-id", required=True,
         help="Comma-separated course IDs to export (e.g. 30004 or 30004,30005)",
+    )
+    parser.add_argument(
+        "--sub-ids", default="",
+        help="Optional comma-separated sub_ids; when set, only those "
+             "lectures are exported (used by the frontend's per-lecture "
+             "selection in the export dialog)",
     )
     parser.add_argument(
         "--pdf",
@@ -221,6 +242,11 @@ def main():
         print("No valid course IDs provided.")
         sys.exit(1)
 
+    # Parse optional sub_ids filter
+    sub_ids = [s.strip() for s in args.sub_ids.split(",") if s.strip()] or None
+    if sub_ids:
+        print(f"Filtering to {len(sub_ids)} sub_id(s): {', '.join(sub_ids)}")
+
     if not config.SMTP_EMAIL or not config.SMTP_PASSWORD or not config.RECEIVER_EMAIL:
         print("Email configuration incomplete. Set SMTP_EMAIL, SMTP_PASSWORD, RECEIVER_EMAIL.")
         sys.exit(1)
@@ -236,7 +262,7 @@ def main():
         attachments: list[tuple[bytes, str]] = []
         titles: list[str] = []
         for cid in course_ids:
-            result = _query_course(db, cid)
+            result = _query_course(db, cid, sub_ids=sub_ids)
             if result is None:
                 continue
             course_title, teacher, lectures = result
@@ -263,7 +289,7 @@ def main():
         # Email mode: one CID-embedded HTML email per course
         sent = 0
         for cid in course_ids:
-            result = _query_course(db, cid)
+            result = _query_course(db, cid, sub_ids=sub_ids)
             if result is None:
                 continue
             course_title, teacher, lectures = result

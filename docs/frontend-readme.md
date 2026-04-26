@@ -26,12 +26,17 @@ https://<你的用户名>.github.io/<仓库名>/
 | **Expiration** | 建议 90 天（过期后可随时重新生成） |
 | **Repository access** | 选择 **Only select repositories** → 选中你 fork 的仓库 |
 | **Permissions → Repository permissions → Contents** | 选择 **Read and write** |
+| **Permissions → Repository permissions → Actions** | 选择 **Read and write** |
 
 其余权限全部保持 **No access**。点击 **Generate token** 并复制保存。
 
-> **为什么需要 Contents: Read and Write？**
-> - **Read**：从 `data` 分支拉取加密数据库
-> - **Write**：将你在网页编辑器中的修改推送回仓库
+> **为什么需要这两组权限？**
+> - **Contents: Read and Write**
+>   - **Read**：从 `data` 分支拉取加密数据库
+>   - **Write**：将你在网页编辑器中的修改推送回仓库
+> - **Actions: Read and Write**
+>   - **Write**：触发 `Export Course Summaries` workflow（前端「导出」按钮使用）
+>   - 没有这个权限，导出按钮会报 `403/404`
 
 ### 3. 首次配置
 
@@ -55,7 +60,7 @@ https://<你的用户名>.github.io/<仓库名>/
 - **节次列表** — 单课程视图，显示状态标签（就绪 / 总结中 / 等待中 / 失败）
 - **摘要阅读** — 完整 Markdown 渲染，支持 LaTeX 公式（KaTeX）
 - **编辑** — 点击编辑按钮修改任意摘要，保存后自动推送到 GitHub
-- **课次摘要导出 PDF** — 在课程课次页点击「导出」，可勾选或全选后下载 PDF
+- **课次摘要导出 PDF** — 在课程课次页点击「导出」并勾选课次后，前端会通过 GitHub API 触发 `Export Course Summaries` workflow（基于 WeasyPrint），PDF 完成后会发送到 `RECEIVER_EMAIL` 邮箱（约 1-3 分钟）。需要 PAT 具备 **Actions: Write** 权限。
 - **搜索** — 全文搜索所有摘要内容
 - **移动端友好** — 底部标签栏导航，触控优化，响应式布局
 
